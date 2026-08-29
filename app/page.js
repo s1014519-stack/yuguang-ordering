@@ -10,6 +10,11 @@ export default function Home() {
   const [selected, setSelected] = useState(null);
   const [amount, setAmount] = useState(null);
   const [qty, setQty] = useState(1);
+  const [showCart, setShowCart] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [customerName, setCustomerName] = useState("");
+  const [customerPhone, setCustomerPhone] = useState("");
+  const [note, setNote] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -21,19 +26,13 @@ export default function Home() {
         .select("id,name,sort_order")
         .eq("is_active", true)
         .order("sort_order");
-
       const { data: prods, error: productError } = await supabase
         .from("products")
         .select("id,category_id,name,description,image_url,pricing_type,price,min_amount,max_amount,amount_step,sort_order")
         .eq("is_active", true)
         .order("sort_order");
-
-      if (catError || productError) {
-        setError(catError?.message || productError?.message || "菜單讀取失敗");
-      } else {
-        setCategories(cats || []);
-        setProducts(prods || []);
-      }
+      if (catError || productError) setError(catError?.message || productError?.message || "菜單讀取失敗");
+      else { setCategories(cats || []); setProducts(prods || []); }
       setLoading(false);
     }
     loadMenu();
@@ -41,140 +40,93 @@ export default function Home() {
 
   const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
   const cartTotal = cart.reduce((sum, item) => sum + item.subtotal, 0);
+  const productItems = productId => cart.filter(item => item.product_id === productId);
 
-  function openProduct(product) {
-    setSelected(product);
-    setQty(1);
-    setAmount(product.pricing_type === "amount" ? product.min_amount : product.price);
+  function openProduct(product, preferredAmount = null) {
+    const items = productItems(product.id);
+    const initialAmount = preferredAmount ?? (product.pricing_type === "amount" ? (items[0]?.unit_price ?? product.min_amount) : product.price);
+    setSelected(product); setQty(1); setAmount(Number(initialAmount));
+  }
+
+  function amountOptions(product) {
+    const values = [], step = Number(product.amount_step), min = Number(product.min_amount), max = Number(product.max_amount);
+    if (!step || step <= 0) return [min];
+    for (let n = min; n <= max; n += step) values.push(n);
+    if (values.at(-1) !== max && max > min) values.push(max);
+    return values;
   }
 
   function addToCart() {
     if (!selected) return;
-    const unitPrice = selected.pricing_type === "amount" ? amount : selected.price;
+    const unitPrice = selected.pricing_type === "amount" ? Number(amount) : Number(selected.price);
+    if (!unitPrice) return;
     const key = `${selected.id}-${unitPrice}`;
-
     setCart(prev => {
       const found = prev.find(item => item.key === key);
-      if (found) {
-        return prev.map(item =>
-          item.key === key
-            ? { ...item, quantity: item.quantity + qty, subtotal: (item.quantity + qty) * unitPrice }
-            : item
-        );
-      }
-      return [...prev, {
-        key,
-        product_id: selected.id,
-        name: selected.name,
-        pricing_type: selected.pricing_type,
-        unit_price: unitPrice,
-        quantity: qty,
-        subtotal: qty * unitPrice
-      }];
+      if (found) return prev.map(item => item.key === key ? { ...item, quantity: item.quantity + qty, subtotal: (item.quantity + qty) * unitPrice } : item);
+      return [...prev, { key, product_id: selected.id, name: selected.name, pricing_type: selected.pricing_type, unit_price: unitPrice, quantity: qty, subtotal: qty * unitPrice }];
     });
     setSelected(null);
   }
 
-  function amountOptions(product) {
-    const values = [];
-    for (let n = product.min_amount; n <= product.max_amount; n += product.amount_step) {
-      values.push(n);
-    }
-    return values;
+  function changeCartItem(key, delta) {
+    setCart(prev => prev.map(item => item.key === key ? { ...item, quantity: item.quantity + delta, subtotal: (item.quantity + delta) * item.unit_price } : item).filter(item => item.quantity > 0));
   }
 
-  const grouped = useMemo(() =>
-    categories.map(category => ({
-      ...category,
-      products: products
-        .filter(p => p.category_id === category.id)
-        .sort((a,b) => a.sort_order - b.sort_order)
-    })).filter(c => c.products.length > 0), [categories, products]);
+  const grouped = useMemo(() => categories.map(category => ({
+    ...category,
+    products: products.filter(p => p.category_id === category.id).sort((a,b) => a.sort_order - b.sort_order)
+  })).filter(c => c.products.length > 0), [categories, products]);
 
   return (
     <main>
-      <header className="hero">
-        <div>
-          <div className="eyebrow">YU GUANG SHAN SHAN</div>
-          <h1>漁光閃閃</h1>
-          <p>線上點餐</p>
-        </div>
-      </header>
-
+      <header className="hero"><div><div className="eyebrow">YU GUANG SHAN SHAN</div><h1>漁光閃閃</h1><p>線上點餐</p></div></header>
       {loading && <div className="state">正在載入菜單…</div>}
       {error && <div className="state error">菜單讀取失敗：{error}</div>}
-
       {!loading && !error && grouped.map(category => (
         <section className="section" key={category.id}>
-          <div className="section-title">
-            <h2>{category.name}</h2>
-          </div>
+          <div className="section-title"><h2>{category.name}</h2></div>
           <div className="grid">
-            {category.products.map(product => (
-              <button className="product" key={product.id} onClick={() => openProduct(product)}>
-                <div className="product-main">
-                  <h3>{product.name}</h3>
-                  {product.description && <p>{product.description}</p>}
-                  <strong>
-                    {product.pricing_type === "amount"
-                      ? `$${product.min_amount.toLocaleString()}～$${product.max_amount.toLocaleString()}`
-                      : `$${product.price.toLocaleString()}`}
-                  </strong>
-                </div>
-                <span className="plus">＋</span>
-              </button>
-            ))}
+            {category.products.map(product => {
+              const selectedItems = productItems(product.id);
+              return <div className={`product ${selectedItems.length ? "product-selected" : ""}`} key={product.id}>
+                <button className="product-click" onClick={() => openProduct(product)}>
+                  <div className="product-main"><h3>{product.name}</h3>{product.description && <p>{product.description}</p>}<strong>{product.pricing_type === "amount" ? `$${Number(product.min_amount).toLocaleString()}～$${Number(product.max_amount).toLocaleString()}／份` : `$${Number(product.price).toLocaleString()}／份`}</strong></div>
+                </button>
+                {selectedItems.length === 0 ? <button className="plus" aria-label={`選擇${product.name}`} onClick={() => openProduct(product)}>＋</button> :
+                  <div className="selected-controls">
+                    {selectedItems.map(item => <div className="selected-line" key={item.key}><span className="selected-price">${item.unit_price.toLocaleString()}／份</span><div className="mini-quantity"><button onClick={() => changeCartItem(item.key, -1)}>−</button><strong>{item.quantity}份</strong><button onClick={() => openProduct(product, item.unit_price)}>＋</button></div></div>)}
+                    {product.pricing_type === "amount" && <button className="add-price" onClick={() => openProduct(product)}>＋ 新增金額</button>}
+                  </div>}
+              </div>;
+            })}
           </div>
         </section>
       ))}
 
-      <div className="cartbar">
-        <div>
-          <span>購物車</span>
-          <small>{cartCount} 項</small>
-        </div>
-        <strong>${cartTotal.toLocaleString()}</strong>
-      </div>
+      <button className="cartbar" onClick={() => cartCount > 0 && setShowCart(true)} disabled={cartCount === 0}><div><span>購物車</span><small>{cartCount} 項</small></div><strong>${cartTotal.toLocaleString()}</strong></button>
 
-      {selected && (
-        <div className="overlay" onClick={() => setSelected(null)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <button className="close" onClick={() => setSelected(null)}>×</button>
-            <div className="eyebrow">商品</div>
-            <h2>{selected.name}</h2>
+      {selected && <div className="overlay" onClick={() => setSelected(null)}><div className="modal" onClick={e => e.stopPropagation()}>
+        <button className="close" onClick={() => setSelected(null)}>×</button><div className="eyebrow">商品</div><h2>{selected.name}</h2>
+        {selected.pricing_type === "amount" ? <><p className="label">選擇每份金額</p><div className="amount-grid">{amountOptions(selected).map(value => <button key={value} className={amount === value ? "amount active" : "amount"} onClick={() => setAmount(value)}>${value.toLocaleString()}</button>)}</div></> : <div className="fixed-price">${Number(selected.price).toLocaleString()}／份</div>}
+        <p className="label">份數</p><div className="quantity"><button onClick={() => setQty(Math.max(1, qty - 1))}>−</button><strong>{qty} 份</strong><button onClick={() => setQty(qty + 1)}>＋</button></div>
+        <button className="primary" onClick={addToCart}>加入購物車　${(Number(amount) * qty).toLocaleString()}</button>
+      </div></div>}
 
-            {selected.pricing_type === "amount" ? (
-              <>
-                <p className="label">選擇金額</p>
-                <div className="amount-grid">
-                  {amountOptions(selected).map(value => (
-                    <button
-                      key={value}
-                      className={amount === value ? "amount active" : "amount"}
-                      onClick={() => setAmount(value)}
-                    >
-                      ${value.toLocaleString()}
-                    </button>
-                  ))}
-                </div>
-              </>
-            ) : (
-              <div className="fixed-price">${selected.price.toLocaleString()}</div>
-            )}
+      {showCart && <div className="overlay" onClick={() => setShowCart(false)}><div className="modal cart-modal" onClick={e => e.stopPropagation()}>
+        <button className="close" onClick={() => setShowCart(false)}>×</button><div className="eyebrow">購物車</div><h2>確認購物內容</h2>
+        {cart.map(item => <div className="cart-item" key={item.key}><div><strong>{item.name}</strong><div className="cart-item-price">${item.unit_price.toLocaleString()}／份</div></div><div className="cart-item-right"><div className="mini-quantity"><button onClick={() => changeCartItem(item.key, -1)}>−</button><strong>{item.quantity}份</strong><button onClick={() => changeCartItem(item.key, 1)}>＋</button></div><strong>${item.subtotal.toLocaleString()}</strong></div></div>)}
+        <div className="cart-total"><span>合計</span><strong>${cartTotal.toLocaleString()}</strong></div><button className="primary" onClick={() => { setShowCart(false); setShowConfirm(true); }}>前往確認點餐</button>
+      </div></div>}
 
-            <p className="label">數量</p>
-            <div className="quantity">
-              <button onClick={() => setQty(Math.max(1, qty - 1))}>−</button>
-              <strong>{qty}</strong>
-              <button onClick={() => setQty(qty + 1)}>＋</button>
-            </div>
-
-            <button className="primary" onClick={addToCart}>
-              加入購物車
-            </button>
-          </div>
-        </div>
-      )}
+      {showConfirm && <div className="overlay" onClick={() => setShowConfirm(false)}><div className="modal" onClick={e => e.stopPropagation()}>
+        <button className="close" onClick={() => setShowConfirm(false)}>×</button><div className="eyebrow">最後確認</div><h2>確認點餐</h2>
+        <div className="confirm-summary"><div><span>共 {cartCount} 項</span><strong>${cartTotal.toLocaleString()}</strong></div>{cart.map(item => <div className="confirm-line" key={item.key}><span>{item.name}　${item.unit_price.toLocaleString()} × {item.quantity}份</span><strong>${item.subtotal.toLocaleString()}</strong></div>)}</div>
+        <p className="label">姓名（選填）</p><input className="input" value={customerName} onChange={e => setCustomerName(e.target.value)} placeholder="請輸入姓名" />
+        <p className="label">電話（選填）</p><input className="input" value={customerPhone} onChange={e => setCustomerPhone(e.target.value)} placeholder="請輸入電話" inputMode="tel" />
+        <p className="label">備註（選填）</p><textarea className="input textarea" value={note} onChange={e => setNote(e.target.value)} placeholder="例如：不要芥末、分開裝…" />
+        <button className="primary" onClick={() => alert("確認資料已完成；下一步接 Supabase orders / order_items。")}>送出點餐</button>
+      </div></div>}
     </main>
   );
 }
