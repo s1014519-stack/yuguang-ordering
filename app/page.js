@@ -119,9 +119,9 @@ export default function Home() {
 
       {selected && <div className="overlay" onClick={() => setSelected(null)}><div className="modal" onClick={e => e.stopPropagation()}>
         <button className="close" onClick={() => setSelected(null)}>×</button><div className="eyebrow">商品</div><h2>{selected.name}</h2>
-        {selected.pricing_type === "amount" && selected.name !== "綜合生魚片" ? <><p className="label">選擇每份金額</p><div className="amount-grid">{amountOptions(selected).map(value => <button key={value} className={amount === value ? "amount active" : "amount"} onClick={() => setAmount(value)}>${value.toLocaleString()}</button>)}</div></> : <div className="fixed-price">${Number(selected.price).toLocaleString()}／份</div>}
+        {selected.pricing_type === "amount" && selected.name !== "綜合生魚片" ? <><p className="label">選擇每份金額</p><div className="amount-grid">{amountOptions(selected).map(value => <button key={value} className={amount === value ? "amount active" : "amount"} onClick={() => setAmount(value)}>${value.toLocaleString()}</button>)}</div></> : <div className="fixed-price">${(selected.name === "綜合生魚片" ? 300 : Number(selected.price)).toLocaleString()}／份</div>}
         <p className="label">份數</p><div className="quantity"><button onClick={() => setQty(Math.max(1, qty - 1))}>−</button><strong>{qty} 份</strong><button onClick={() => setQty(qty + 1)}>＋</button></div>
-        <button className="primary" onClick={addToCart}>加入購物車　${(Number(amount) * qty).toLocaleString()}</button>
+        <button className="primary" onClick={addToCart}>加入購物車　${((selected.name === "綜合生魚片" ? 300 : selected.pricing_type === "amount" ? Number(amount) : Number(selected.price)) * qty).toLocaleString()}</button>
       </div></div>}
 
       {showCart && <div className="overlay" onClick={() => setShowCart(false)}><div className="modal cart-modal" onClick={e => e.stopPropagation()}>
