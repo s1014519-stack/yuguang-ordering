@@ -43,15 +43,24 @@ export default function Home() {
   const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
   const cartTotal = cart.reduce((sum, item) => sum + item.subtotal, 0);
   const productItems = productId => cart.filter(item => item.product_id === productId);
+  const isSashimiCategory = categoryId => {
+    const category = categories.find(c => c.id === categoryId);
+    return category?.name === "生魚片";
+  };
+  const sashimiTotal = cart.reduce((sum, item) => {
+    const product = products.find(p => p.id === item.product_id);
+    return isSashimiCategory(product?.category_id) ? sum + item.subtotal : sum;
+  }, 0);
+  const sashimiShortfall = Math.max(0, 200 - sashimiTotal);
 
   function openProduct(product, preferredAmount = null) {
     const items = productItems(product.id);
-    const initialAmount = preferredAmount ?? (product.pricing_type === "amount" ? (items[0]?.unit_price ?? product.min_amount) : product.price);
+    const initialAmount = preferredAmount ?? (product.name === "綜合生魚片" ? 300 : product.pricing_type === "amount" ? (items[0]?.unit_price ?? (isSashimiCategory(product.category_id) ? 100 : product.min_amount)) : product.price);
     setSelected(product); setQty(1); setAmount(Number(initialAmount));
   }
 
   function amountOptions(product) {
-    const values = [], step = Number(product.amount_step), min = Number(product.min_amount), max = Number(product.max_amount);
+    const values = [], step = isSashimiCategory(product.category_id) ? 100 : Number(product.amount_step), min = isSashimiCategory(product.category_id) ? 100 : Number(product.min_amount), max = Number(product.max_amount);
     if (!step || step <= 0) return [min];
     for (let n = min; n <= max; n += step) values.push(n);
     if (values.at(-1) !== max && max > min) values.push(max);
@@ -60,7 +69,7 @@ export default function Home() {
 
   function addToCart() {
     if (!selected) return;
-    const unitPrice = selected.pricing_type === "amount" ? Number(amount) : Number(selected.price);
+    const unitPrice = selected.name === "綜合生魚片" ? 300 : selected.pricing_type === "amount" ? Number(amount) : Number(selected.price);
     if (!unitPrice) return;
     const key = `${selected.id}-${unitPrice}`;
     setCart(prev => {
@@ -93,7 +102,7 @@ export default function Home() {
               const selectedItems = productItems(product.id);
               return <div className={`product ${selectedItems.length ? "product-selected" : ""}`} key={product.id}>
                 <button className="product-click" onClick={() => openProduct(product)}>
-                  <div className="product-main"><h3>{product.name}</h3>{product.description && <p>{product.description}</p>}<strong>{product.pricing_type === "amount" ? `$${Number(product.min_amount).toLocaleString()}～$${Number(product.max_amount).toLocaleString()}／份` : `$${Number(product.price).toLocaleString()}／份`}</strong></div>
+                  <div className="product-main"><h3>{product.name}</h3>{product.description && <p>{product.description}</p>}<strong>{product.name === "綜合生魚片" ? "$300／份" : product.pricing_type === "amount" ? `$${isSashimiCategory(product.category_id) ? 100 : Number(product.min_amount).toLocaleString()}～$${Number(product.max_amount).toLocaleString()}／份` : `$${Number(product.price).toLocaleString()}／份`}</strong></div>
                 </button>
                 {selectedItems.length === 0 ? <button className="plus" aria-label={`選擇${product.name}`} onClick={() => openProduct(product)}>＋</button> :
                   <div className="selected-controls">
@@ -110,7 +119,7 @@ export default function Home() {
 
       {selected && <div className="overlay" onClick={() => setSelected(null)}><div className="modal" onClick={e => e.stopPropagation()}>
         <button className="close" onClick={() => setSelected(null)}>×</button><div className="eyebrow">商品</div><h2>{selected.name}</h2>
-        {selected.pricing_type === "amount" ? <><p className="label">選擇每份金額</p><div className="amount-grid">{amountOptions(selected).map(value => <button key={value} className={amount === value ? "amount active" : "amount"} onClick={() => setAmount(value)}>${value.toLocaleString()}</button>)}</div></> : <div className="fixed-price">${Number(selected.price).toLocaleString()}／份</div>}
+        {selected.pricing_type === "amount" && selected.name !== "綜合生魚片" ? <><p className="label">選擇每份金額</p><div className="amount-grid">{amountOptions(selected).map(value => <button key={value} className={amount === value ? "amount active" : "amount"} onClick={() => setAmount(value)}>${value.toLocaleString()}</button>)}</div></> : <div className="fixed-price">${Number(selected.price).toLocaleString()}／份</div>}
         <p className="label">份數</p><div className="quantity"><button onClick={() => setQty(Math.max(1, qty - 1))}>−</button><strong>{qty} 份</strong><button onClick={() => setQty(qty + 1)}>＋</button></div>
         <button className="primary" onClick={addToCart}>加入購物車　${(Number(amount) * qty).toLocaleString()}</button>
       </div></div>}
@@ -118,7 +127,9 @@ export default function Home() {
       {showCart && <div className="overlay" onClick={() => setShowCart(false)}><div className="modal cart-modal" onClick={e => e.stopPropagation()}>
         <button className="close" onClick={() => setShowCart(false)}>×</button><div className="eyebrow">購物車</div><h2>確認購物內容</h2>
         {cart.map(item => <div className="cart-item" key={item.key}><div><strong>{item.name}</strong><div className="cart-item-price">${item.unit_price.toLocaleString()}／份</div></div><div className="cart-item-right"><div className="mini-quantity"><button onClick={() => changeCartItem(item.key, -1)}>−</button><strong>{item.quantity}份</strong><button onClick={() => changeCartItem(item.key, 1)}>＋</button></div><strong>${item.subtotal.toLocaleString()}</strong></div></div>)}
-        <div className="cart-total"><span>合計</span><strong>${cartTotal.toLocaleString()}</strong></div><button className="primary" onClick={() => { setShowCart(false); setShowConfirm(true); }}>前往確認點餐</button>
+        <div className="cart-total"><span>合計</span><strong>${cartTotal.toLocaleString()}</strong></div>
+        {sashimiTotal > 0 && sashimiTotal < 200 && <div className="sashimi-warning">生魚片目前合計 ${sashimiTotal.toLocaleString()}，還差 ${sashimiShortfall.toLocaleString()} 才能點餐。</div>}
+        <button className="primary" disabled={sashimiTotal > 0 && sashimiTotal < 200} onClick={() => { setShowCart(false); setShowConfirm(true); }}>前往確認點餐</button>
       </div></div>}
 
       {successOrder && <div className="overlay"><div className="modal success-modal">
@@ -137,6 +148,7 @@ export default function Home() {
         <p className="label">備註（選填）</p><textarea className="input textarea" value={note} onChange={e => setNote(e.target.value)} placeholder="例如：不要芥末、分開裝…" />
         <button className="primary" disabled={submitting} onClick={async () => {
               if (!cart.length || submitting) return;
+              if (sashimiTotal > 0 && sashimiTotal < 200) { alert(`生魚片合計至少需要 $200，目前為 $${sashimiTotal.toLocaleString()}，還差 $${sashimiShortfall.toLocaleString()}。`); return; }
               setSubmitting(true);
               try {
                 const { data, error } = await supabase.rpc("create_order", {
