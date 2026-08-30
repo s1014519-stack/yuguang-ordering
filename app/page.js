@@ -136,32 +136,41 @@ export default function Home() {
         <p className="label">電話（選填）</p><input className="input" value={customerPhone} onChange={e => setCustomerPhone(e.target.value)} placeholder="請輸入電話" inputMode="tel" />
         <p className="label">備註（選填）</p><textarea className="input textarea" value={note} onChange={e => setNote(e.target.value)} placeholder="例如：不要芥末、分開裝…" />
         <button className="primary" disabled={submitting} onClick={async () => {
-          if (!cart.length || submitting) return;
-          setSubmitting(true);
-          const { data, error } = await supabase.rpc("create_order", {
-            p_customer_name: customerName,
-            p_customer_phone: customerPhone,
-            p_note: note,
-            p_total_amount: cartTotal,
-            p_items: cart.map(item => ({
-              product_id: item.product_id,
-              product_name: item.name,
-              pricing_type: item.pricing_type,
-              quantity: item.quantity,
-              unit_price: item.unit_price,
-              selected_amount: item.pricing_type === "amount" ? item.unit_price : null,
-              subtotal: item.subtotal
-            }))
-          });
-          setSubmitting(false);
-          if (error) {
-            alert(`送出失敗：${error.message}`);
-            return;
-          }
-          setCart([]);
-          setShowConfirm(false);
-          setSuccessOrder({ ...data, total_amount: cartTotal });
-        }}>{submitting ? "送出中…" : "送出點餐"}</button>
+              if (!cart.length || submitting) return;
+              setSubmitting(true);
+              try {
+                const { data, error } = await supabase.rpc("create_order", {
+                  p_customer_name: customerName,
+                  p_customer_phone: customerPhone,
+                  p_note: note,
+                  p_total_amount: cartTotal,
+                  p_items: cart.map(item => ({
+                    product_id: item.product_id,
+                    product_name: item.name,
+                    pricing_type: item.pricing_type,
+                    quantity: item.quantity,
+                    unit_price: item.unit_price,
+                    selected_amount: item.pricing_type === "amount" ? item.unit_price : null,
+                    subtotal: item.subtotal
+                  }))
+                });
+                if (error) throw error;
+                const result = Array.isArray(data) ? data[0] : data;
+                if (!result?.order_number || !result?.order_id) {
+                  throw new Error("訂單已送出，但沒有取得訂單編號，請檢查 create_order 函式回傳值。");
+                }
+                const submittedTotal = cartTotal;
+                setCart([]);
+                setShowConfirm(false);
+                setSuccessOrder({ ...result, total_amount: submittedTotal });
+              } catch (err) {
+                alert(`送出失敗：${err?.message || "未知錯誤"}`);
+              } finally {
+                setSubmitting(false);
+              }
+            }}>
+              {submitting ? "送出中…" : "送出點餐"}
+            </button>
       </div></div>}
     </main>
   );
