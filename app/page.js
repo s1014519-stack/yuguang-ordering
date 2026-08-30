@@ -12,6 +12,8 @@ export default function Home() {
   const [qty, setQty] = useState(1);
   const [showCart, setShowCart] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [successOrder, setSuccessOrder] = useState(null);
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
   const [note, setNote] = useState("");
@@ -119,13 +121,47 @@ export default function Home() {
         <div className="cart-total"><span>合計</span><strong>${cartTotal.toLocaleString()}</strong></div><button className="primary" onClick={() => { setShowCart(false); setShowConfirm(true); }}>前往確認點餐</button>
       </div></div>}
 
+      {successOrder && <div className="overlay"><div className="modal success-modal">
+        <div className="success-icon">✓</div><div className="eyebrow">ORDER RECEIVED</div><h2>點餐成功</h2>
+        <p className="success-text">您的訂單已送出，請稍候。</p>
+        <div className="success-card"><span>訂單編號</span><strong>{successOrder.order_number}</strong></div>
+        <div className="success-card"><span>訂單金額</span><strong>${Number(successOrder.total_amount).toLocaleString()}</strong></div>
+        <button className="primary" onClick={() => setSuccessOrder(null)}>回到菜單</button>
+      </div></div>}
+
       {showConfirm && <div className="overlay" onClick={() => setShowConfirm(false)}><div className="modal" onClick={e => e.stopPropagation()}>
         <button className="close" onClick={() => setShowConfirm(false)}>×</button><div className="eyebrow">最後確認</div><h2>確認點餐</h2>
         <div className="confirm-summary"><div><span>共 {cartCount} 項</span><strong>${cartTotal.toLocaleString()}</strong></div>{cart.map(item => <div className="confirm-line" key={item.key}><span>{item.name}　${item.unit_price.toLocaleString()} × {item.quantity}份</span><strong>${item.subtotal.toLocaleString()}</strong></div>)}</div>
         <p className="label">姓名（選填）</p><input className="input" value={customerName} onChange={e => setCustomerName(e.target.value)} placeholder="請輸入姓名" />
         <p className="label">電話（選填）</p><input className="input" value={customerPhone} onChange={e => setCustomerPhone(e.target.value)} placeholder="請輸入電話" inputMode="tel" />
         <p className="label">備註（選填）</p><textarea className="input textarea" value={note} onChange={e => setNote(e.target.value)} placeholder="例如：不要芥末、分開裝…" />
-        <button className="primary" onClick={() => alert("確認資料已完成；下一步接 Supabase orders / order_items。")}>送出點餐</button>
+        <button className="primary" disabled={submitting} onClick={async () => {
+          if (!cart.length || submitting) return;
+          setSubmitting(true);
+          const { data, error } = await supabase.rpc("create_order", {
+            p_customer_name: customerName,
+            p_customer_phone: customerPhone,
+            p_note: note,
+            p_total_amount: cartTotal,
+            p_items: cart.map(item => ({
+              product_id: item.product_id,
+              product_name: item.name,
+              pricing_type: item.pricing_type,
+              quantity: item.quantity,
+              unit_price: item.unit_price,
+              selected_amount: item.pricing_type === "amount" ? item.unit_price : null,
+              subtotal: item.subtotal
+            }))
+          });
+          setSubmitting(false);
+          if (error) {
+            alert(`送出失敗：${error.message}`);
+            return;
+          }
+          setCart([]);
+          setShowConfirm(false);
+          setSuccessOrder({ ...data, total_amount: cartTotal });
+        }}>{submitting ? "送出中…" : "送出點餐"}</button>
       </div></div>}
     </main>
   );
