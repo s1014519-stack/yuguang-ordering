@@ -53,3 +53,9 @@ npm run dev
 3. `is_open = false` 時前端顯示休息通知、停用商品選擇與購物車送單。
 4. 送單前會再次讀取營業狀態，降低客人停留舊頁面後仍送單的風險。
 5. 前端也訂閱 `store_settings` 更新；若 Supabase Realtime 已允許此資料表，切換狀態可即時反映。
+
+
+## 店家後台 V1
+- 後台路徑：`/admin`
+- 設定方式請看 `ADMIN-SETUP.md`
+- 部署前請先在 Supabase 執行 `supabase-admin-v1.sql`。
