@@ -190,9 +190,9 @@ export default function AdminPage() {
       sort_order: Number(newProduct.sort_order || 0),
       is_active: !!newProduct.is_active,
       price: newProduct.pricing_type === "fixed" ? Number(newProduct.price || 0) : null,
-      min_amount: newProduct.pricing_type === "amount" ? Number(newProduct.min_amount || 0) : null,
-      max_amount: newProduct.pricing_type === "amount" ? Number(newProduct.max_amount || 0) : null,
-      amount_step: newProduct.pricing_type === "amount" ? Number(newProduct.amount_step || 0) : null,
+      min_amount: newProduct.pricing_type === "amount" ? Number(newProduct.min_amount || 0) : 0,
+      max_amount: newProduct.pricing_type === "amount" ? Number(newProduct.max_amount || 0) : 0,
+      amount_step: newProduct.pricing_type === "amount" ? Number(newProduct.amount_step || 0) : 50,
     };
     const { error } = await supabase.from("products").insert(payload);
     if (error) {
@@ -210,9 +210,9 @@ export default function AdminPage() {
       name: String(product.name).trim(), category_id: product.category_id, pricing_type: product.pricing_type,
       is_active: !!product.is_active, sort_order: Number(product.sort_order || 0),
       price: product.pricing_type === "fixed" ? Number(product.price || 0) : null,
-      min_amount: product.pricing_type === "amount" ? Number(product.min_amount || 0) : null,
-      max_amount: product.pricing_type === "amount" ? Number(product.max_amount || 0) : null,
-      amount_step: product.pricing_type === "amount" ? Number(product.amount_step || 0) : null,
+      min_amount: product.pricing_type === "amount" ? Number(product.min_amount || 0) : 0,
+      max_amount: product.pricing_type === "amount" ? Number(product.max_amount || 0) : 0,
+      amount_step: product.pricing_type === "amount" ? Number(product.amount_step || 0) : 50,
     };
     const { error } = await supabase.from("products").update(payload).eq("id", product.id);
     if (error) setError(friendlyError(error, "商品儲存失敗。請確認 V8.1 商品權限 SQL 已執行。"));
