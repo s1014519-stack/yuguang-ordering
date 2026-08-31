@@ -22,6 +22,28 @@ function localDateKey(value = new Date()) {
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
 }
+function normalizePhone(value) {
+  return String(value || "").replace(/\D/g, "");
+}
+function csvCell(value) {
+  const text = String(value ?? "").replace(/"/g, '""');
+  return `"${text}"`;
+}
+function downloadTextFile(filename, text, type) {
+  const blob = new Blob([text], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+function xmlEscape(value) {
+  return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+function workbookXml(sheets) {
+  const rowsXml = rows => rows.map(row => `<Row>${row.map(cell => `<Cell><Data ss:Type="${typeof cell === "number" ? "Number" : "String"}">${xmlEscape(cell)}</Data></Cell>`).join("")}</Row>`).join("");
+  return `<?xml version="1.0"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">${sheets.map(sheet => `<Worksheet ss:Name="${xmlEscape(sheet.name)}"><Table>${rowsXml(sheet.rows)}</Table></Worksheet>`).join("")}</Workbook>`;
+}
+
 function friendlyError(error, fallback = "操作失敗，請稍後再試。") {
   const message = String(error?.message || error || "").toLowerCase();
   if (!message) return fallback;
@@ -48,7 +70,8 @@ export default function AdminPage() {
   const [filter, setFilter] = useState("active");
   const [search, setSearch] = useState("");
   const [dateFilter, setDateFilter] = useState("today");
-  const [customDate, setCustomDate] = useState(localDateKey());
+  const [customStartDate, setCustomStartDate] = useState(localDateKey());
+  const [customEndDate, setCustomEndDate] = useState(localDateKey());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [storeSettings, setStoreSettings] = useState({ is_open: true, closed_message: CLOSED_DEFAULT });
@@ -64,6 +87,10 @@ export default function AdminPage() {
   const [savingNewProduct, setSavingNewProduct] = useState(false);
   const [newProduct, setNewProduct] = useState({ name: "", category_id: "", pricing_type: "fixed", price: 0, min_amount: 100, max_amount: 1000, amount_step: 100, sort_order: 0, is_active: true });
 
+  const [analyticsStart, setAnalyticsStart] = useState(localDateKey());
+  const [analyticsEnd, setAnalyticsEnd] = useState(localDateKey());
+  const [analyticsStatus, setAnalyticsStatus] = useState("all");
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => { setSession(data.session || null); setAuthLoading(false); });
     const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => { setSession(nextSession || null); setAuthLoading(false); });
@@ -74,22 +101,31 @@ export default function AdminPage() {
     if (!session) return;
     setLoading(true); setError("");
     try {
-      const [{ data: orderRows, error: ordersError }, { data: setting, error: settingError }] = await Promise.all([
-        supabase.from("orders").select("id,order_number,customer_name,customer_phone,note,total_amount,status,created_at").order("created_at", { ascending: false }).limit(500),
-        supabase.from("store_settings").select("is_open,closed_message").eq("id", 1).single(),
-      ]);
-      if (ordersError) throw ordersError;
+      const { data: setting, error: settingError } = await supabase.from("store_settings").select("is_open,closed_message").eq("id", 1).single();
       if (settingError) throw settingError;
-      setOrders(orderRows || []);
+
+      const orderRows = [];
+      const pageSize = 1000;
+      for (let from = 0; ; from += pageSize) {
+        const { data, error: ordersError } = await supabase.from("orders").select("id,order_number,customer_name,customer_phone,note,total_amount,status,created_at").order("created_at", { ascending: false }).range(from, from + pageSize - 1);
+        if (ordersError) throw ordersError;
+        orderRows.push(...(data || []));
+        if (!data || data.length < pageSize) break;
+      }
+      setOrders(orderRows);
       setStoreSettings({ is_open: setting?.is_open !== false, closed_message: setting?.closed_message || CLOSED_DEFAULT });
-      const orderIds = (orderRows || []).map(o => o.id);
-      if (orderIds.length) {
-        const { data: itemRows, error: itemsError } = await supabase.from("order_items").select("id,order_id,product_name,pricing_type,quantity,unit_price,selected_amount,subtotal").in("order_id", orderIds);
+
+      const orderIds = orderRows.map(o => o.id);
+      const itemRows = [];
+      for (let i = 0; i < orderIds.length; i += 200) {
+        const chunk = orderIds.slice(i, i + 200);
+        const { data, error: itemsError } = await supabase.from("order_items").select("id,order_id,product_name,pricing_type,quantity,unit_price,selected_amount,subtotal").in("order_id", chunk);
         if (itemsError) throw itemsError;
-        const grouped = {};
-        for (const item of itemRows || []) { if (!grouped[item.order_id]) grouped[item.order_id] = []; grouped[item.order_id].push(item); }
-        setItemsByOrder(grouped);
-      } else setItemsByOrder({});
+        itemRows.push(...(data || []));
+      }
+      const grouped = {};
+      for (const item of itemRows) { if (!grouped[item.order_id]) grouped[item.order_id] = []; grouped[item.order_id].push(item); }
+      setItemsByOrder(grouped);
     } catch (err) { setError(friendlyError(err, "後台資料讀取失敗，請重新整理。")); }
     finally { setLoading(false); }
   }, [session]);
@@ -133,11 +169,64 @@ export default function AdminPage() {
     return orders.filter(order => {
       const statusOk = filter === "all" ? true : filter === "active" ? ["pending", "accepted"].includes(order.status) : order.status === filter;
       const orderKey = localDateKey(order.created_at);
-      const dateOk = dateFilter === "all" ? true : dateFilter === "today" ? orderKey === todayKey : dateFilter === "yesterday" ? orderKey === yesterdayKey : orderKey === customDate;
+      const dateOk = dateFilter === "all" ? true : dateFilter === "today" ? orderKey === todayKey : dateFilter === "yesterday" ? orderKey === yesterdayKey : orderKey >= customStartDate && orderKey <= customEndDate;
       const searchOk = !q || String(order.order_number || "").includes(q) || String(order.customer_name || "").toLowerCase().includes(q) || String(order.customer_phone || "").includes(q);
       return statusOk && dateOk && searchOk;
     });
-  }, [orders, filter, search, dateFilter, customDate, todayKey, yesterdayKey]);
+  }, [orders, filter, search, dateFilter, customStartDate, customEndDate, todayKey, yesterdayKey]);
+
+  const analyticsOrders = useMemo(() => {
+    const start = analyticsStart || "0000-01-01";
+    const end = analyticsEnd || "9999-12-31";
+    return orders.filter(order => {
+      const key = localDateKey(order.created_at);
+      const dateOk = key >= start && key <= end;
+      const statusOk = analyticsStatus === "all" || order.status === analyticsStatus;
+      return dateOk && statusOk;
+    });
+  }, [orders, analyticsStart, analyticsEnd, analyticsStatus]);
+
+  const analyticsSummary = useMemo(() => {
+    const revenueOrders = analyticsOrders.filter(o => o.status !== "cancelled");
+    const revenue = revenueOrders.reduce((sum, o) => sum + Number(o.total_amount || 0), 0);
+    return {
+      orders: analyticsOrders.length, revenue,
+      avg: revenueOrders.length ? Math.round(revenue / revenueOrders.length) : 0,
+      completed: analyticsOrders.filter(o => o.status === "completed").length,
+      cancelled: analyticsOrders.filter(o => o.status === "cancelled").length,
+    };
+  }, [analyticsOrders]);
+
+  const productStats = useMemo(() => {
+    const map = new Map();
+    for (const order of analyticsOrders) {
+      if (order.status === "cancelled") continue;
+      for (const item of itemsByOrder[order.id] || []) {
+        const key = item.product_name || "未命名商品";
+        const row = map.get(key) || { name: key, quantity: 0, orders: 0, revenue: 0, amountSelections: 0 };
+        row.quantity += Number(item.quantity || 0);
+        row.orders += 1;
+        row.revenue += Number(item.subtotal || 0);
+        if (item.pricing_type === "amount") row.amountSelections += Number(item.selected_amount || 0) * Number(item.quantity || 0);
+        map.set(key, row);
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => b.revenue - a.revenue || b.quantity - a.quantity);
+  }, [analyticsOrders, itemsByOrder]);
+
+  const customerStats = useMemo(() => {
+    const map = new Map();
+    for (const order of analyticsOrders) {
+      if (order.status === "cancelled") continue;
+      const phone = normalizePhone(order.customer_phone);
+      const key = phone || `name:${String(order.customer_name || "未填姓名").trim()}`;
+      const row = map.get(key) || { name: order.customer_name || "未填姓名", phone: order.customer_phone || "", orders: 0, revenue: 0, latest: order.created_at, orderNumbers: [] };
+      row.orders += 1; row.revenue += Number(order.total_amount || 0); row.orderNumbers.push(order.order_number);
+      if (new Date(order.created_at) > new Date(row.latest)) row.latest = order.created_at;
+      map.set(key, row);
+    }
+    return Array.from(map.values()).sort((a, b) => b.revenue - a.revenue || b.orders - a.orders);
+  }, [analyticsOrders]);
 
   const categoryName = id => categories.find(c => c.id === id)?.name || "未分類";
   const visibleProducts = useMemo(() => {
@@ -171,6 +260,28 @@ export default function AdminPage() {
     else { setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status } : o)); setSelectedOrder(prev => prev?.id === orderId ? { ...prev, status } : prev); }
     setUpdatingOrder(null);
   }
+  function exportCsv() {
+    const header = ["訂單編號","日期時間","客戶姓名","電話","狀態","商品","計價方式","數量","單價","選擇金額","商品小計","訂單總額","備註"];
+    const rows = [header];
+    for (const order of analyticsOrders) {
+      const items = itemsByOrder[order.id] || [];
+      if (!items.length) rows.push([order.order_number, formatTime(order.created_at), order.customer_name || "", order.customer_phone || "", STATUS_META[order.status]?.label || order.status, "", "", "", "", "", "", Number(order.total_amount || 0), order.note || ""]);
+      for (const item of items) rows.push([order.order_number, formatTime(order.created_at), order.customer_name || "", order.customer_phone || "", STATUS_META[order.status]?.label || order.status, item.product_name, item.pricing_type === "amount" ? "彈性金額" : "固定價格", Number(item.quantity || 0), Number(item.unit_price || 0), Number(item.selected_amount || 0), Number(item.subtotal || 0), Number(order.total_amount || 0), order.note || ""]);
+    }
+    const csv = "\ufeff" + rows.map(row => row.map(csvCell).join(",")).join("\r\n");
+    downloadTextFile(`漁光閃閃_訂單_${analyticsStart}_${analyticsEnd}.csv`, csv, "text/csv;charset=utf-8");
+  }
+
+  function exportExcel() {
+    const summaryRows = [["漁光閃閃 訂單分析"],["開始日期",analyticsStart],["結束日期",analyticsEnd],["狀態",analyticsStatus === "all" ? "全部" : (STATUS_META[analyticsStatus]?.label || analyticsStatus)],["訂單數",analyticsSummary.orders],["營業額",analyticsSummary.revenue],["平均客單",analyticsSummary.avg],["已完成",analyticsSummary.completed],["已取消",analyticsSummary.cancelled]];
+    const detailRows = [["訂單編號","日期時間","客戶姓名","電話","狀態","商品","計價方式","數量","單價","選擇金額","商品小計","訂單總額","備註"]];
+    for (const order of analyticsOrders) for (const item of (itemsByOrder[order.id] || [])) detailRows.push([String(order.order_number || ""), formatTime(order.created_at), order.customer_name || "", order.customer_phone || "", STATUS_META[order.status]?.label || order.status, item.product_name || "", item.pricing_type === "amount" ? "彈性金額" : "固定價格", Number(item.quantity || 0), Number(item.unit_price || 0), Number(item.selected_amount || 0), Number(item.subtotal || 0), Number(order.total_amount || 0), order.note || ""]);
+    const customerRows = [["客戶姓名","電話","訂單次數","累積消費","最近消費","訂單編號"]].concat(customerStats.map(c => [c.name,c.phone,c.orders,c.revenue,formatTime(c.latest),c.orderNumbers.map(n => `#${n}`).join("、")]));
+    const productRows = [["商品","購買量","購買筆數","銷售額","彈性選購總額"]].concat(productStats.map(p => [p.name,p.quantity,p.orders,p.revenue,p.amountSelections]));
+    const xml = workbookXml([{ name: "營業摘要", rows: summaryRows }, { name: "訂單明細", rows: detailRows }, { name: "客戶統計", rows: customerRows }, { name: "商品統計", rows: productRows }]);
+    downloadTextFile(`漁光閃閃_訂單分析_${analyticsStart}_${analyticsEnd}.xls`, xml, "application/vnd.ms-excel;charset=utf-8");
+  }
+
   function editProduct(id, field, value) { setProducts(prev => prev.map(p => p.id === id ? { ...p, [field]: value } : p)); }
   function resetNewProduct() {
     setNewProduct({ name: "", category_id: categories[0]?.id || "", pricing_type: "fixed", price: 0, min_amount: 100, max_amount: 1000, amount_step: 100, sort_order: (products.reduce((max, p) => Math.max(max, Number(p.sort_order || 0)), 0) + 1), is_active: true });
@@ -237,7 +348,7 @@ export default function AdminPage() {
 
   return <main className="admin-shell">
     <header className="admin-topbar"><div><span className="admin-kicker">漁光閃閃</span><h1>店家後台</h1></div><button className="admin-logout" onClick={() => supabase.auth.signOut()}>登出</button></header>
-    <nav className="admin-main-tabs"><button className={section === "orders" ? "active" : ""} onClick={() => setSection("orders")}>訂單管理</button><button className={section === "products" ? "active" : ""} onClick={() => setSection("products")}>商品管理</button></nav>
+    <nav className="admin-main-tabs"><button className={section === "orders" ? "active" : ""} onClick={() => setSection("orders")}>訂單管理</button><button className={section === "analytics" ? "active" : ""} onClick={() => setSection("analytics")}>訂單分析</button><button className={section === "products" ? "active" : ""} onClick={() => setSection("products")}>商品管理</button></nav>
 
     <div className="admin-content">
       {section === "orders" && <>
@@ -246,12 +357,24 @@ export default function AdminPage() {
         <section className="admin-summary v8-summary"><div><span>今日訂單</span><strong>{todayOrders.length}</strong></div><div><span>今日營業額</span><strong>${todayRevenue.toLocaleString()}</strong></div><div><span>新訂單</span><strong>{pendingCount}</strong></div><div><span>製作中</span><strong>{acceptedCount}</strong></div><div><span>已完成</span><strong>{completedCount}</strong></div></section>
 
         <section className="admin-orders-card"><div className="admin-orders-head"><div><h2>訂單</h2><span>{loading ? "更新中…" : `顯示 ${visibleOrders.length} 筆`}</span></div><button className="refresh-button" onClick={loadDashboard} disabled={loading}>{loading ? "更新中" : "重新整理"}</button></div>
-          <div className="admin-search-row"><input className="input" value={search} onChange={e => setSearch(e.target.value)} placeholder="搜尋訂單編號、姓名或電話"/><select className="input" value={dateFilter} onChange={e => setDateFilter(e.target.value)}><option value="today">今天</option><option value="yesterday">昨天</option><option value="all">全部日期</option><option value="custom">指定日期</option></select>{dateFilter === "custom" && <input className="input" type="date" value={customDate} onChange={e => setCustomDate(e.target.value)}/>}</div>
+          <div className="admin-search-row"><input className="input" value={search} onChange={e => setSearch(e.target.value)} placeholder="搜尋訂單編號、姓名或電話"/><select className="input" value={dateFilter} onChange={e => setDateFilter(e.target.value)}><option value="today">今天</option><option value="yesterday">昨天</option><option value="all">全部日期</option><option value="custom">指定區間</option></select>{dateFilter === "custom" && <><input className="input" type="date" value={customStartDate} onChange={e => setCustomStartDate(e.target.value)}/><input className="input" type="date" value={customEndDate} onChange={e => setCustomEndDate(e.target.value)}/></>}</div>
           <div className="admin-filters">{[["active","待處理"],["pending","新訂單"],["accepted","製作中"],["completed","已完成"],["cancelled","已取消"],["all","全部"]].map(([value,label]) => <button key={value} className={filter === value ? "active" : ""} onClick={() => setFilter(value)}>{label}</button>)}</div>
           {error && <div className="admin-error">{error}</div>}{!loading && visibleOrders.length === 0 && <div className="admin-empty">找不到符合條件的訂單。</div>}
           <div className="admin-order-list">{visibleOrders.map(order => { const meta = STATUS_META[order.status] || { label: "未知狀態", className: "" }; const itemCount = (itemsByOrder[order.id] || []).reduce((sum,item) => sum + Number(item.quantity || 0), 0); return <button key={order.id} className={`admin-order-card status-${meta.className}`} onClick={() => setSelectedOrder(order)}><div className="order-card-top"><div><span className="order-number">#{order.order_number}</span><span className="order-time">{formatTime(order.created_at)}</span></div><span className={`status-pill ${meta.className}`}>{meta.label}</span></div><div className="order-card-middle"><div><strong>{order.customer_name || "未填姓名"}</strong><span>{itemCount} 份商品{order.note ? " · 有備註" : ""}</span></div><strong className="order-price">${Number(order.total_amount || 0).toLocaleString()}</strong></div><div className="order-card-action">查看訂單內容 <span>›</span></div></button>; })}</div>
         </section>
       </>}
+
+      {section === "analytics" && <section className="admin-orders-card admin-analytics-card">
+        <div className="admin-orders-head"><div><h2>訂單分析</h2><span>日期區間可設定同一天</span></div><button className="refresh-button" onClick={loadDashboard} disabled={loading}>{loading ? "更新中" : "重新整理"}</button></div>
+        <div className="analytics-filter-grid"><label><span>開始日期</span><input className="input" type="date" value={analyticsStart} onChange={e => setAnalyticsStart(e.target.value)}/></label><label><span>結束日期</span><input className="input" type="date" value={analyticsEnd} onChange={e => setAnalyticsEnd(e.target.value)}/></label><label><span>訂單狀態</span><select className="input" value={analyticsStatus} onChange={e => setAnalyticsStatus(e.target.value)}><option value="all">全部</option><option value="pending">新訂單</option><option value="accepted">製作中</option><option value="completed">已完成</option><option value="cancelled">已取消</option></select></label></div>
+        {analyticsStart > analyticsEnd && <div className="admin-error">開始日期不能晚於結束日期。</div>}
+        <div className="analytics-actions"><button onClick={exportCsv} disabled={analyticsStart > analyticsEnd}>匯出 CSV</button><button className="excel" onClick={exportExcel} disabled={analyticsStart > analyticsEnd}>匯出 Excel</button></div>
+        <section className="admin-summary analytics-summary"><div><span>訂單數</span><strong>{analyticsSummary.orders}</strong></div><div><span>營業額</span><strong>${analyticsSummary.revenue.toLocaleString()}</strong></div><div><span>平均客單</span><strong>${analyticsSummary.avg.toLocaleString()}</strong></div><div><span>已完成</span><strong>{analyticsSummary.completed}</strong></div><div><span>已取消</span><strong>{analyticsSummary.cancelled}</strong></div></section>
+        <div className="analytics-grid">
+          <section className="analytics-panel"><div className="analytics-panel-head"><h3>客戶統計</h3><span>電話優先分組</span></div><div className="analytics-table-wrap"><table><thead><tr><th>客戶</th><th>訂單</th><th>累積</th><th>最近</th></tr></thead><tbody>{customerStats.map((c,i) => <tr key={`${c.phone}-${c.name}-${i}`}><td><strong>{c.name}</strong><small>{c.phone || "無電話"}</small><small>訂單：{c.orderNumbers.map(n => `#${n}`).join("、")}</small></td><td>{c.orders}</td><td>${c.revenue.toLocaleString()}</td><td>{formatTime(c.latest)}</td></tr>)}</tbody></table></div>{customerStats.length === 0 && <div className="admin-empty compact">沒有符合條件的客戶資料。</div>}</section>
+          <section className="analytics-panel"><div className="analytics-panel-head"><h3>商品統計</h3><span>取消訂單不計營業額</span></div><div className="analytics-table-wrap"><table><thead><tr><th>商品</th><th>購買量</th><th>銷售額</th></tr></thead><tbody>{productStats.map(p => <tr key={p.name}><td><strong>{p.name}</strong><small>{p.orders} 筆明細</small></td><td>{p.quantity}</td><td>${p.revenue.toLocaleString()}</td></tr>)}</tbody></table></div>{productStats.length === 0 && <div className="admin-empty compact">沒有符合條件的商品資料。</div>}</section>
+        </div>
+      </section>}
 
       {section === "products" && <section className="admin-orders-card admin-products-card"><div className="admin-orders-head"><div><h2>商品管理</h2><span>新增、編輯、上下架與排序</span></div><div className="admin-product-head-actions"><button className="refresh-button" onClick={loadProducts} disabled={productLoading}>{productLoading ? "更新中" : "重新整理"}</button><button className="admin-add-product" onClick={openAddProduct}>＋ 新增商品</button></div></div><div className="admin-product-note">修改後按「儲存商品」才會更新。曾出現在歷史訂單的商品只能下架，不能永久刪除。</div><input className="input admin-product-search" value={productSearch} onChange={e => setProductSearch(e.target.value)} placeholder="搜尋商品或分類"/>{error && <div className="admin-error">{error}</div>}
         <div className="admin-product-list">{visibleProducts.map(product => <article className={`admin-product-item ${!product.is_active ? "inactive" : ""}`} key={product.id}><div className="admin-product-head"><div><span>{categoryName(product.category_id)}</span><strong>{product.name}</strong></div><label className="admin-switch"><input type="checkbox" checked={!!product.is_active} onChange={e => editProduct(product.id,"is_active",e.target.checked)}/><span>{product.is_active ? "上架" : "下架"}</span></label></div><div className="admin-product-fields"><label className="full"><span>商品名稱</span><input className="input" value={product.name} onChange={e => editProduct(product.id,"name",e.target.value)}/></label><label><span>分類</span><select className="input" value={product.category_id || ""} onChange={e => editProduct(product.id,"category_id",e.target.value)}>{categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label><label><span>計價方式</span><select className="input" value={product.pricing_type} onChange={e => editProduct(product.id,"pricing_type",e.target.value)}><option value="fixed">固定價格</option><option value="amount">彈性金額</option></select></label>{product.pricing_type === "fixed" ? <label><span>價格</span><input className="input" type="number" min="0" step="1" value={product.price ?? 0} onChange={e => editProduct(product.id,"price",e.target.value)}/></label> : <><label><span>最低金額</span><input className="input" type="number" min="0" step="1" value={product.min_amount ?? 0} onChange={e => editProduct(product.id,"min_amount",e.target.value)}/></label><label><span>最高金額</span><input className="input" type="number" min="0" step="1" value={product.max_amount ?? 0} onChange={e => editProduct(product.id,"max_amount",e.target.value)}/></label><label><span>金額級距</span><input className="input" type="number" min="1" step="1" value={product.amount_step ?? 100} onChange={e => editProduct(product.id,"amount_step",e.target.value)}/></label></>}<label><span>排序</span><input className="input" type="number" value={product.sort_order ?? 0} onChange={e => editProduct(product.id,"sort_order",e.target.value)}/></label></div><div className="admin-product-actions"><button className="admin-product-delete" disabled={savingProduct === product.id} onClick={() => deleteProduct(product)}>刪除</button><button className="admin-product-save" disabled={savingProduct === product.id} onClick={() => saveProduct(product)}>{savingProduct === product.id ? "處理中…" : "儲存商品"}</button></div></article>)}</div>
