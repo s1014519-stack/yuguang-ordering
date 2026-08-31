@@ -86,6 +86,10 @@ export default function AdminPage() {
   const [showAddProduct, setShowAddProduct] = useState(false);
   const [savingNewProduct, setSavingNewProduct] = useState(false);
   const [newProduct, setNewProduct] = useState({ name: "", category_id: "", pricing_type: "fixed", price: 0, min_amount: 100, max_amount: 1000, amount_step: 100, sort_order: 0, is_active: true });
+  const [savingCategory, setSavingCategory] = useState(null);
+  const [showAddCategory, setShowAddCategory] = useState(false);
+  const [savingNewCategory, setSavingNewCategory] = useState(false);
+  const [newCategory, setNewCategory] = useState({ name: "", sort_order: 0, is_active: true });
 
   const [analyticsStart, setAnalyticsStart] = useState(localDateKey());
   const [analyticsEnd, setAnalyticsEnd] = useState(localDateKey());
@@ -282,6 +286,44 @@ export default function AdminPage() {
     downloadTextFile(`漁光閃閃_訂單分析_${analyticsStart}_${analyticsEnd}.xls`, xml, "application/vnd.ms-excel;charset=utf-8");
   }
 
+  function editCategory(id, field, value) { setCategories(prev => prev.map(c => c.id === id ? { ...c, [field]: value } : c)); }
+  function openAddCategory() {
+    setNewCategory({ name: "", sort_order: categories.reduce((max, c) => Math.max(max, Number(c.sort_order || 0)), 0) + 1, is_active: true });
+    setError(""); setShowAddCategory(true);
+  }
+  async function createCategory(e) {
+    e.preventDefault();
+    const name = newCategory.name.trim();
+    if (!name) { setError("請輸入分類名稱。"); return; }
+    if (categories.some(c => c.name.trim().toLowerCase() === name.toLowerCase())) { setError(`分類「${name}」已存在。`); return; }
+    setSavingNewCategory(true); setError("");
+    const { error } = await supabase.from("categories").insert({ id: crypto.randomUUID(), name, sort_order: Number(newCategory.sort_order || 0), is_active: !!newCategory.is_active });
+    if (error) setError(friendlyError(error, "新增分類失敗。請先執行 V8.2.1 分類管理 SQL。"));
+    else { setShowAddCategory(false); await loadProducts(); }
+    setSavingNewCategory(false);
+  }
+  async function saveCategory(category) {
+    const name = String(category.name || "").trim();
+    if (!name) { setError("分類名稱不能空白。"); return; }
+    if (categories.some(c => c.id !== category.id && c.name.trim().toLowerCase() === name.toLowerCase())) { setError(`分類「${name}」已存在。`); return; }
+    setSavingCategory(category.id); setError("");
+    const { error } = await supabase.from("categories").update({ name, sort_order: Number(category.sort_order || 0), is_active: !!category.is_active }).eq("id", category.id);
+    if (error) setError(friendlyError(error, "分類儲存失敗。請先執行 V8.2.1 分類管理 SQL。"));
+    else await loadProducts();
+    setSavingCategory(null);
+  }
+  async function deleteCategory(category) {
+    setError("");
+    const usedCount = products.filter(p => p.category_id === category.id).length;
+    if (usedCount > 0) { setError(`「${category.name}」底下還有 ${usedCount} 個商品，請先將商品移到其他分類後再刪除；若只是暫停使用，可直接將分類下架。`); return; }
+    if (!window.confirm(`確定要永久刪除分類「${category.name}」嗎？此動作無法復原。`)) return;
+    setSavingCategory(category.id);
+    const { error } = await supabase.from("categories").delete().eq("id", category.id);
+    if (error) setError(friendlyError(error, "分類刪除失敗。請先執行 V8.2.1 分類管理 SQL。"));
+    else await loadProducts();
+    setSavingCategory(null);
+  }
+
   function editProduct(id, field, value) { setProducts(prev => prev.map(p => p.id === id ? { ...p, [field]: value } : p)); }
   function resetNewProduct() {
     setNewProduct({ name: "", category_id: categories[0]?.id || "", pricing_type: "fixed", price: 0, min_amount: 100, max_amount: 1000, amount_step: 100, sort_order: (products.reduce((max, p) => Math.max(max, Number(p.sort_order || 0)), 0) + 1), is_active: true });
@@ -376,10 +418,14 @@ export default function AdminPage() {
         </div>
       </section>}
 
-      {section === "products" && <section className="admin-orders-card admin-products-card"><div className="admin-orders-head"><div><h2>商品管理</h2><span>新增、編輯、上下架與排序</span></div><div className="admin-product-head-actions"><button className="refresh-button" onClick={loadProducts} disabled={productLoading}>{productLoading ? "更新中" : "重新整理"}</button><button className="admin-add-product" onClick={openAddProduct}>＋ 新增商品</button></div></div><div className="admin-product-note">修改後按「儲存商品」才會更新。曾出現在歷史訂單的商品只能下架，不能永久刪除。</div><input className="input admin-product-search" value={productSearch} onChange={e => setProductSearch(e.target.value)} placeholder="搜尋商品或分類"/>{error && <div className="admin-error">{error}</div>}
+      {section === "products" && <section className="admin-orders-card admin-products-card"><div className="admin-orders-head"><div><h2>商品管理</h2><span>分類、商品、上下架與排序</span></div><div className="admin-product-head-actions"><button className="refresh-button" onClick={loadProducts} disabled={productLoading}>{productLoading ? "更新中" : "重新整理"}</button><button className="admin-add-product" onClick={openAddProduct}>＋ 新增商品</button></div></div>
+        <section className="admin-category-panel"><div className="admin-category-title"><div><h3>分類管理</h3><span>前台依排序顯示；下架後前台隱藏</span></div><button className="admin-add-category" onClick={openAddCategory}>＋ 新增分類</button></div><div className="admin-category-list">{categories.map(category => <article className={`admin-category-item ${!category.is_active ? "inactive" : ""}`} key={category.id}><div className="admin-category-fields"><label><span>分類名稱</span><input className="input" value={category.name} onChange={e => editCategory(category.id,"name",e.target.value)}/></label><label><span>排序</span><input className="input" type="number" step="1" value={category.sort_order ?? 0} onChange={e => editCategory(category.id,"sort_order",e.target.value)}/></label><label className="admin-category-active"><span>狀態</span><span className="admin-switch"><input type="checkbox" checked={!!category.is_active} onChange={e => editCategory(category.id,"is_active",e.target.checked)}/><b>{category.is_active ? "上架" : "下架"}</b></span></label></div><div className="admin-category-actions"><button className="admin-product-delete" disabled={savingCategory === category.id} onClick={() => deleteCategory(category)}>刪除</button><button className="admin-product-save" disabled={savingCategory === category.id} onClick={() => saveCategory(category)}>{savingCategory === category.id ? "處理中…" : "儲存分類"}</button></div></article>)}</div></section>
+        <div className="admin-product-note">修改後按「儲存商品」才會更新。曾出現在歷史訂單的商品只能下架，不能永久刪除。</div><input className="input admin-product-search" value={productSearch} onChange={e => setProductSearch(e.target.value)} placeholder="搜尋商品或分類"/>{error && <div className="admin-error">{error}</div>}
         <div className="admin-product-list">{visibleProducts.map(product => <article className={`admin-product-item ${!product.is_active ? "inactive" : ""}`} key={product.id}><div className="admin-product-head"><div><span>{categoryName(product.category_id)}</span><strong>{product.name}</strong></div><label className="admin-switch"><input type="checkbox" checked={!!product.is_active} onChange={e => editProduct(product.id,"is_active",e.target.checked)}/><span>{product.is_active ? "上架" : "下架"}</span></label></div><div className="admin-product-fields"><label className="full"><span>商品名稱</span><input className="input" value={product.name} onChange={e => editProduct(product.id,"name",e.target.value)}/></label><label><span>分類</span><select className="input" value={product.category_id || ""} onChange={e => editProduct(product.id,"category_id",e.target.value)}>{categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label><label><span>計價方式</span><select className="input" value={product.pricing_type} onChange={e => editProduct(product.id,"pricing_type",e.target.value)}><option value="fixed">固定價格</option><option value="amount">彈性金額</option></select></label>{product.pricing_type === "fixed" ? <label><span>價格</span><input className="input" type="number" min="0" step="1" value={product.price ?? 0} onChange={e => editProduct(product.id,"price",e.target.value)}/></label> : <><label><span>最低金額</span><input className="input" type="number" min="0" step="1" value={product.min_amount ?? 0} onChange={e => editProduct(product.id,"min_amount",e.target.value)}/></label><label><span>最高金額</span><input className="input" type="number" min="0" step="1" value={product.max_amount ?? 0} onChange={e => editProduct(product.id,"max_amount",e.target.value)}/></label><label><span>金額級距</span><input className="input" type="number" min="1" step="1" value={product.amount_step ?? 100} onChange={e => editProduct(product.id,"amount_step",e.target.value)}/></label></>}<label><span>排序</span><input className="input" type="number" value={product.sort_order ?? 0} onChange={e => editProduct(product.id,"sort_order",e.target.value)}/></label></div><div className="admin-product-actions"><button className="admin-product-delete" disabled={savingProduct === product.id} onClick={() => deleteProduct(product)}>刪除</button><button className="admin-product-save" disabled={savingProduct === product.id} onClick={() => saveProduct(product)}>{savingProduct === product.id ? "處理中…" : "儲存商品"}</button></div></article>)}</div>
       </section>}
     </div>
+
+    {showAddCategory && <div className="overlay admin-overlay" onClick={() => !savingNewCategory && setShowAddCategory(false)}><form className="modal admin-product-modal" onSubmit={createCategory} onClick={e => e.stopPropagation()}><div className="admin-modal-handle"></div><button type="button" className="close" disabled={savingNewCategory} onClick={() => setShowAddCategory(false)}>×</button><div className="admin-modal-title-row"><div><span>商品管理</span><h2>新增分類</h2></div></div><div className="admin-new-product-fields"><label><span>分類名稱</span><input className="input" value={newCategory.name} onChange={e => setNewCategory(c => ({ ...c, name: e.target.value }))} placeholder="例如：烤物" required/></label><label><span>排序</span><input className="input" type="number" step="1" value={newCategory.sort_order} onChange={e => setNewCategory(c => ({ ...c, sort_order: e.target.value }))}/></label><label className="admin-new-active"><input type="checkbox" checked={newCategory.is_active} onChange={e => setNewCategory(c => ({ ...c, is_active: e.target.checked }))}/><span>新增後立即上架</span></label></div>{error && <div className="admin-error">{error}</div>}<button className="primary" disabled={savingNewCategory}>{savingNewCategory ? "新增中…" : "新增分類"}</button></form></div>}
 
     {showAddProduct && <div className="overlay admin-overlay" onClick={() => !savingNewProduct && setShowAddProduct(false)}><form className="modal admin-product-modal" onSubmit={createProduct} onClick={e => e.stopPropagation()}><div className="admin-modal-handle"></div><button type="button" className="close" disabled={savingNewProduct} onClick={() => setShowAddProduct(false)}>×</button><div className="admin-modal-title-row"><div><span>商品管理</span><h2>新增商品</h2></div></div><div className="admin-new-product-fields"><label><span>商品名稱</span><input className="input" value={newProduct.name} onChange={e => setNewProduct(p => ({ ...p, name: e.target.value }))} placeholder="例如：鮭魚握壽司" required/></label><label><span>分類</span><select className="input" value={newProduct.category_id} onChange={e => setNewProduct(p => ({ ...p, category_id: e.target.value }))} required><option value="">請選擇分類</option>{categories.filter(c => c.is_active !== false).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label><label><span>計價方式</span><select className="input" value={newProduct.pricing_type} onChange={e => setNewProduct(p => ({ ...p, pricing_type: e.target.value }))}><option value="fixed">固定價格</option><option value="amount">彈性金額</option></select></label>{newProduct.pricing_type === "fixed" ? <label><span>價格</span><input className="input" type="number" min="0" step="1" value={newProduct.price} onChange={e => setNewProduct(p => ({ ...p, price: e.target.value }))} required/></label> : <><label><span>最低金額</span><input className="input" type="number" min="0" step="1" value={newProduct.min_amount} onChange={e => setNewProduct(p => ({ ...p, min_amount: e.target.value }))} required/></label><label><span>最高金額</span><input className="input" type="number" min="0" step="1" value={newProduct.max_amount} onChange={e => setNewProduct(p => ({ ...p, max_amount: e.target.value }))} required/></label><label><span>每次增加</span><input className="input" type="number" min="1" step="1" value={newProduct.amount_step} onChange={e => setNewProduct(p => ({ ...p, amount_step: e.target.value }))} required/></label></>}<label><span>排序</span><input className="input" type="number" value={newProduct.sort_order} onChange={e => setNewProduct(p => ({ ...p, sort_order: e.target.value }))}/></label><label className="admin-new-active"><input type="checkbox" checked={newProduct.is_active} onChange={e => setNewProduct(p => ({ ...p, is_active: e.target.checked }))}/><span>新增後立即上架</span></label></div>{error && <div className="admin-error">{error}</div>}<button className="primary" disabled={savingNewProduct}>{savingNewProduct ? "新增中…" : "新增商品"}</button></form></div>}
 
