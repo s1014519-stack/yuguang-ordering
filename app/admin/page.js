@@ -60,6 +60,9 @@ export default function AdminPage() {
   const [productLoading, setProductLoading] = useState(false);
   const [productSearch, setProductSearch] = useState("");
   const [savingProduct, setSavingProduct] = useState(null);
+  const [showAddProduct, setShowAddProduct] = useState(false);
+  const [savingNewProduct, setSavingNewProduct] = useState(false);
+  const [newProduct, setNewProduct] = useState({ name: "", category_id: "", pricing_type: "fixed", price: 0, min_amount: 100, max_amount: 1000, amount_step: 100, sort_order: 0, is_active: true });
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => { setSession(data.session || null); setAuthLoading(false); });
@@ -169,13 +172,58 @@ export default function AdminPage() {
     setUpdatingOrder(null);
   }
   function editProduct(id, field, value) { setProducts(prev => prev.map(p => p.id === id ? { ...p, [field]: value } : p)); }
+  function resetNewProduct() {
+    setNewProduct({ name: "", category_id: categories[0]?.id || "", pricing_type: "fixed", price: 0, min_amount: 100, max_amount: 1000, amount_step: 100, sort_order: (products.reduce((max, p) => Math.max(max, Number(p.sort_order || 0)), 0) + 1), is_active: true });
+  }
+  function openAddProduct() { resetNewProduct(); setError(""); setShowAddProduct(true); }
+  async function createProduct(e) {
+    e.preventDefault();
+    const name = newProduct.name.trim();
+    if (!name) { setError("請輸入商品名稱。"); return; }
+    if (!newProduct.category_id) { setError("請選擇商品分類。"); return; }
+    setSavingNewProduct(true); setError("");
+    const payload = {
+      name,
+      category_id: newProduct.category_id,
+      pricing_type: newProduct.pricing_type,
+      sort_order: Number(newProduct.sort_order || 0),
+      is_active: !!newProduct.is_active,
+      price: newProduct.pricing_type === "fixed" ? Number(newProduct.price || 0) : null,
+      min_amount: newProduct.pricing_type === "amount" ? Number(newProduct.min_amount || 0) : null,
+      max_amount: newProduct.pricing_type === "amount" ? Number(newProduct.max_amount || 0) : null,
+      amount_step: newProduct.pricing_type === "amount" ? Number(newProduct.amount_step || 0) : null,
+    };
+    const { error } = await supabase.from("products").insert(payload);
+    if (error) setError(friendlyError(error, "新增商品失敗。請先執行 V8.1 商品權限 SQL。"));
+    else { setShowAddProduct(false); await loadProducts(); }
+    setSavingNewProduct(false);
+  }
   async function saveProduct(product) {
+    if (!String(product.name || "").trim()) { setError("商品名稱不能空白。"); return; }
     setSavingProduct(product.id); setError("");
-    const payload = { is_active: !!product.is_active, sort_order: Number(product.sort_order || 0) };
-    if (product.pricing_type === "fixed") payload.price = Number(product.price || 0);
-    else { payload.min_amount = Number(product.min_amount || 0); payload.max_amount = Number(product.max_amount || 0); payload.amount_step = Number(product.amount_step || 0); }
+    const payload = {
+      name: String(product.name).trim(), category_id: product.category_id, pricing_type: product.pricing_type,
+      is_active: !!product.is_active, sort_order: Number(product.sort_order || 0),
+      price: product.pricing_type === "fixed" ? Number(product.price || 0) : null,
+      min_amount: product.pricing_type === "amount" ? Number(product.min_amount || 0) : null,
+      max_amount: product.pricing_type === "amount" ? Number(product.max_amount || 0) : null,
+      amount_step: product.pricing_type === "amount" ? Number(product.amount_step || 0) : null,
+    };
     const { error } = await supabase.from("products").update(payload).eq("id", product.id);
-    if (error) setError(friendlyError(error, "商品儲存失敗。請確認 V8 商品權限 SQL 已執行。"));
+    if (error) setError(friendlyError(error, "商品儲存失敗。請確認 V8.1 商品權限 SQL 已執行。"));
+    else await loadProducts();
+    setSavingProduct(null);
+  }
+  async function deleteProduct(product) {
+    setError("");
+    const { data: usedRows, error: usedError } = await supabase.from("order_items").select("id").eq("product_id", product.id).limit(1);
+    if (usedError) { setError(friendlyError(usedError, "無法確認商品歷史訂單，因此沒有刪除商品。")); return; }
+    if ((usedRows || []).length > 0) { setError(`「${product.name}」已有歷史訂單紀錄，為保留訂單資料不能刪除；請改用下架。`); return; }
+    if (!window.confirm(`確定要永久刪除「${product.name}」嗎？此動作無法復原。`)) return;
+    setSavingProduct(product.id);
+    const { error } = await supabase.from("products").delete().eq("id", product.id);
+    if (error) setError(friendlyError(error, "商品刪除失敗。請確認 V8.1 商品權限 SQL 已執行。"));
+    else await loadProducts();
     setSavingProduct(null);
   }
 
@@ -200,10 +248,12 @@ export default function AdminPage() {
         </section>
       </>}
 
-      {section === "products" && <section className="admin-orders-card admin-products-card"><div className="admin-orders-head"><div><h2>商品管理</h2><span>價格、上下架與排序</span></div><button className="refresh-button" onClick={loadProducts} disabled={productLoading}>{productLoading ? "更新中" : "重新整理"}</button></div><div className="admin-product-note">修改後按「儲存」才會更新。下架商品會從客人菜單隱藏。</div><input className="input admin-product-search" value={productSearch} onChange={e => setProductSearch(e.target.value)} placeholder="搜尋商品或分類"/>{error && <div className="admin-error">{error}</div>}
-        <div className="admin-product-list">{visibleProducts.map(product => <article className={`admin-product-item ${!product.is_active ? "inactive" : ""}`} key={product.id}><div className="admin-product-head"><div><span>{categoryName(product.category_id)}</span><strong>{product.name}</strong></div><label className="admin-switch"><input type="checkbox" checked={!!product.is_active} onChange={e => editProduct(product.id,"is_active",e.target.checked)}/><span>{product.is_active ? "上架" : "下架"}</span></label></div><div className="admin-product-fields">{product.pricing_type === "fixed" ? <label><span>價格</span><input className="input" type="number" min="0" step="10" value={product.price ?? 0} onChange={e => editProduct(product.id,"price",e.target.value)}/></label> : <><label><span>最低金額</span><input className="input" type="number" min="0" step="50" value={product.min_amount ?? 0} onChange={e => editProduct(product.id,"min_amount",e.target.value)}/></label><label><span>最高金額</span><input className="input" type="number" min="0" step="50" value={product.max_amount ?? 0} onChange={e => editProduct(product.id,"max_amount",e.target.value)}/></label><label><span>金額級距</span><input className="input" type="number" min="1" step="50" value={product.amount_step ?? 0} onChange={e => editProduct(product.id,"amount_step",e.target.value)}/></label></>}<label><span>排序</span><input className="input" type="number" value={product.sort_order ?? 0} onChange={e => editProduct(product.id,"sort_order",e.target.value)}/></label></div><button className="admin-product-save" disabled={savingProduct === product.id} onClick={() => saveProduct(product)}>{savingProduct === product.id ? "儲存中…" : "儲存商品"}</button></article>)}</div>
+      {section === "products" && <section className="admin-orders-card admin-products-card"><div className="admin-orders-head"><div><h2>商品管理</h2><span>新增、編輯、上下架與排序</span></div><div className="admin-product-head-actions"><button className="refresh-button" onClick={loadProducts} disabled={productLoading}>{productLoading ? "更新中" : "重新整理"}</button><button className="admin-add-product" onClick={openAddProduct}>＋ 新增商品</button></div></div><div className="admin-product-note">修改後按「儲存商品」才會更新。曾出現在歷史訂單的商品只能下架，不能永久刪除。</div><input className="input admin-product-search" value={productSearch} onChange={e => setProductSearch(e.target.value)} placeholder="搜尋商品或分類"/>{error && <div className="admin-error">{error}</div>}
+        <div className="admin-product-list">{visibleProducts.map(product => <article className={`admin-product-item ${!product.is_active ? "inactive" : ""}`} key={product.id}><div className="admin-product-head"><div><span>{categoryName(product.category_id)}</span><strong>{product.name}</strong></div><label className="admin-switch"><input type="checkbox" checked={!!product.is_active} onChange={e => editProduct(product.id,"is_active",e.target.checked)}/><span>{product.is_active ? "上架" : "下架"}</span></label></div><div className="admin-product-fields"><label className="full"><span>商品名稱</span><input className="input" value={product.name} onChange={e => editProduct(product.id,"name",e.target.value)}/></label><label><span>分類</span><select className="input" value={product.category_id || ""} onChange={e => editProduct(product.id,"category_id",e.target.value)}>{categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label><label><span>計價方式</span><select className="input" value={product.pricing_type} onChange={e => editProduct(product.id,"pricing_type",e.target.value)}><option value="fixed">固定價格</option><option value="amount">彈性金額</option></select></label>{product.pricing_type === "fixed" ? <label><span>價格</span><input className="input" type="number" min="0" step="10" value={product.price ?? 0} onChange={e => editProduct(product.id,"price",e.target.value)}/></label> : <><label><span>最低金額</span><input className="input" type="number" min="0" step="50" value={product.min_amount ?? 0} onChange={e => editProduct(product.id,"min_amount",e.target.value)}/></label><label><span>最高金額</span><input className="input" type="number" min="0" step="50" value={product.max_amount ?? 0} onChange={e => editProduct(product.id,"max_amount",e.target.value)}/></label><label><span>金額級距</span><input className="input" type="number" min="1" step="50" value={product.amount_step ?? 0} onChange={e => editProduct(product.id,"amount_step",e.target.value)}/></label></>}<label><span>排序</span><input className="input" type="number" value={product.sort_order ?? 0} onChange={e => editProduct(product.id,"sort_order",e.target.value)}/></label></div><div className="admin-product-actions"><button className="admin-product-delete" disabled={savingProduct === product.id} onClick={() => deleteProduct(product)}>刪除</button><button className="admin-product-save" disabled={savingProduct === product.id} onClick={() => saveProduct(product)}>{savingProduct === product.id ? "處理中…" : "儲存商品"}</button></div></article>)}</div>
       </section>}
     </div>
+
+    {showAddProduct && <div className="overlay admin-overlay" onClick={() => !savingNewProduct && setShowAddProduct(false)}><form className="modal admin-product-modal" onSubmit={createProduct} onClick={e => e.stopPropagation()}><div className="admin-modal-handle"></div><button type="button" className="close" disabled={savingNewProduct} onClick={() => setShowAddProduct(false)}>×</button><div className="admin-modal-title-row"><div><span>商品管理</span><h2>新增商品</h2></div></div><div className="admin-new-product-fields"><label><span>商品名稱</span><input className="input" value={newProduct.name} onChange={e => setNewProduct(p => ({ ...p, name: e.target.value }))} placeholder="例如：鮭魚握壽司" required/></label><label><span>分類</span><select className="input" value={newProduct.category_id} onChange={e => setNewProduct(p => ({ ...p, category_id: e.target.value }))} required><option value="">請選擇分類</option>{categories.filter(c => c.is_active !== false).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label><label><span>計價方式</span><select className="input" value={newProduct.pricing_type} onChange={e => setNewProduct(p => ({ ...p, pricing_type: e.target.value }))}><option value="fixed">固定價格</option><option value="amount">彈性金額</option></select></label>{newProduct.pricing_type === "fixed" ? <label><span>價格</span><input className="input" type="number" min="0" step="10" value={newProduct.price} onChange={e => setNewProduct(p => ({ ...p, price: e.target.value }))} required/></label> : <><label><span>最低金額</span><input className="input" type="number" min="0" step="50" value={newProduct.min_amount} onChange={e => setNewProduct(p => ({ ...p, min_amount: e.target.value }))} required/></label><label><span>最高金額</span><input className="input" type="number" min="0" step="50" value={newProduct.max_amount} onChange={e => setNewProduct(p => ({ ...p, max_amount: e.target.value }))} required/></label><label><span>每次增加</span><input className="input" type="number" min="1" step="50" value={newProduct.amount_step} onChange={e => setNewProduct(p => ({ ...p, amount_step: e.target.value }))} required/></label></>}<label><span>排序</span><input className="input" type="number" value={newProduct.sort_order} onChange={e => setNewProduct(p => ({ ...p, sort_order: e.target.value }))}/></label><label className="admin-new-active"><input type="checkbox" checked={newProduct.is_active} onChange={e => setNewProduct(p => ({ ...p, is_active: e.target.checked }))}/><span>新增後立即上架</span></label></div>{error && <div className="admin-error">{error}</div>}<button className="primary" disabled={savingNewProduct}>{savingNewProduct ? "新增中…" : "新增商品"}</button></form></div>}
 
     {selectedOrder && <div className="overlay admin-overlay" onClick={() => setSelectedOrder(null)}><div className="modal admin-order-modal" onClick={e => e.stopPropagation()}><div className="admin-modal-handle"></div><button className="close" onClick={() => setSelectedOrder(null)}>×</button><div className="admin-modal-title-row"><div><span>訂單 #{selectedOrder.order_number}</span><h2>{selectedOrder.customer_name || "未填姓名"}</h2></div><span className={`status-pill ${(STATUS_META[selectedOrder.status] || {}).className || ""}`}>{(STATUS_META[selectedOrder.status] || {}).label || "未知狀態"}</span></div><div className="admin-detail-meta"><span>{formatTime(selectedOrder.created_at)}</span>{selectedOrder.customer_phone && <a href={`tel:${selectedOrder.customer_phone}`}>{selectedOrder.customer_phone}</a>}</div><div className="admin-detail-items">{(itemsByOrder[selectedOrder.id] || []).map(item => <div key={item.id}><div><strong>{item.product_name}</strong><span>{item.pricing_type === "amount" && item.selected_amount ? `選擇金額 $${Number(item.selected_amount).toLocaleString()} · ${item.quantity} 份` : item.unit_price ? `$${Number(item.unit_price).toLocaleString()} × ${item.quantity}` : `${item.quantity} 份`}</span></div><strong>${Number(item.subtotal || 0).toLocaleString()}</strong></div>)}</div>{selectedOrder.note && <div className="admin-note"><span>客人備註</span><strong>{selectedOrder.note}</strong></div>}<div className="admin-detail-total"><span>訂單總額</span><strong>${Number(selectedOrder.total_amount || 0).toLocaleString()}</strong></div><div className="admin-status-actions">{selectedOrder.status === "pending" && <button className="accept" disabled={updatingOrder === selectedOrder.id} onClick={() => updateStatus(selectedOrder.id,"accepted")}>{updatingOrder === selectedOrder.id ? "處理中…" : "接單並開始製作"}</button>}{selectedOrder.status === "accepted" && <button className="complete" disabled={updatingOrder === selectedOrder.id} onClick={() => updateStatus(selectedOrder.id,"completed")}>{updatingOrder === selectedOrder.id ? "處理中…" : "完成訂單"}</button>}{["pending","accepted"].includes(selectedOrder.status) && <button className="cancel" disabled={updatingOrder === selectedOrder.id} onClick={() => updateStatus(selectedOrder.id,"cancelled")}>取消訂單</button>}{["completed","cancelled"].includes(selectedOrder.status) && <button className="restore" disabled={updatingOrder === selectedOrder.id} onClick={() => updateStatus(selectedOrder.id,"accepted")}>恢復為製作中</button>}</div></div></div>}
   </main>;
