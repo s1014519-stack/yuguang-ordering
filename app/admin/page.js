@@ -183,6 +183,7 @@ export default function AdminPage() {
     if (!newProduct.category_id) { setError("請選擇商品分類。"); return; }
     setSavingNewProduct(true); setError("");
     const payload = {
+      id: crypto.randomUUID(),
       name,
       category_id: newProduct.category_id,
       pricing_type: newProduct.pricing_type,
@@ -194,7 +195,11 @@ export default function AdminPage() {
       amount_step: newProduct.pricing_type === "amount" ? Number(newProduct.amount_step || 0) : null,
     };
     const { error } = await supabase.from("products").insert(payload);
-    if (error) setError(friendlyError(error, "新增商品失敗。請先執行 V8.1 商品權限 SQL。"));
+    if (error) {
+      console.error("create product error", error);
+      const detail = [error.code, error.message, error.details, error.hint].filter(Boolean).join(" · ");
+      setError(detail ? `新增商品失敗：${detail}` : "新增商品失敗。請確認 Supabase 商品新增權限。");
+    }
     else { setShowAddProduct(false); await loadProducts(); }
     setSavingNewProduct(false);
   }
