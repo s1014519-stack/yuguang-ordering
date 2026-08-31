@@ -45,3 +45,11 @@ npm run dev
 - 寫入 orders
 - 寫入 order_items
 - 訂單成功頁
+
+
+## V5 新增：營業狀態
+1. 先在 Supabase SQL Editor 執行 `supabase-v5-store-settings.sql`。
+2. `store_settings.id = 1` 的 `is_open = true` 時正常點餐。
+3. `is_open = false` 時前端顯示休息通知、停用商品選擇與購物車送單。
+4. 送單前會再次讀取營業狀態，降低客人停留舊頁面後仍送單的風險。
+5. 前端也訂閱 `store_settings` 更新；若 Supabase Realtime 已允許此資料表，切換狀態可即時反映。

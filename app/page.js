@@ -19,8 +19,22 @@ export default function Home() {
   const [note, setNote] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [storeOpen, setStoreOpen] = useState(true);
+  const [closedMessage, setClosedMessage] = useState("目前尚未營業，請稍後再來。 ");
 
   useEffect(() => {
+    async function loadStoreStatus() {
+      const { data, error } = await supabase
+        .from("store_settings")
+        .select("is_open,closed_message")
+        .eq("id", 1)
+        .maybeSingle();
+      if (!error && data) {
+        setStoreOpen(data.is_open !== false);
+        setClosedMessage(data.closed_message || "目前尚未營業，請稍後再來。");
+      }
+    }
+
     async function loadMenu() {
       setLoading(true);
       const { data: cats, error: catError } = await supabase
@@ -37,7 +51,19 @@ export default function Home() {
       else { setCategories(cats || []); setProducts(prods || []); }
       setLoading(false);
     }
+    loadStoreStatus();
     loadMenu();
+
+    const channel = supabase
+      .channel("store-status")
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "store_settings", filter: "id=eq.1" }, payload => {
+        const next = payload.new || {};
+        setStoreOpen(next.is_open !== false);
+        setClosedMessage(next.closed_message || "目前尚未營業，請稍後再來。");
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, []);
 
   const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
@@ -54,6 +80,7 @@ export default function Home() {
   const sashimiShortfall = Math.max(0, 200 - sashimiTotal);
 
   function openProduct(product, preferredAmount = null) {
+    if (!storeOpen) return;
     const items = productItems(product.id);
     const initialAmount = preferredAmount ?? (product.name === "綜合生魚片" ? 300 : product.pricing_type === "amount" ? (items[0]?.unit_price ?? (isSashimiCategory(product.category_id) ? 100 : product.min_amount)) : product.price);
     setSelected(product); setQty(1); setAmount(Number(initialAmount));
@@ -68,6 +95,7 @@ export default function Home() {
   }
 
   function addToCart() {
+    if (!storeOpen) { setSelected(null); return; }
     if (!selected) return;
     const unitPrice = selected.name === "綜合生魚片" ? 300 : selected.pricing_type === "amount" ? Number(amount) : Number(selected.price);
     if (!unitPrice) return;
@@ -92,6 +120,7 @@ export default function Home() {
   return (
     <main>
       <header className="hero"><div><div className="eyebrow">YU GUANG SHAN SHAN</div><h1>漁光閃閃</h1><p>線上點餐</p></div></header>
+      {!storeOpen && <div className="closed-banner"><strong>目前尚未營業</strong><span>{closedMessage}</span></div>}
       {loading && <div className="state">正在載入菜單…</div>}
       {error && <div className="state error">菜單讀取失敗：{error}</div>}
       {!loading && !error && grouped.map(category => (
@@ -100,11 +129,11 @@ export default function Home() {
           <div className="grid">
             {category.products.map(product => {
               const selectedItems = productItems(product.id);
-              return <div className={`product ${selectedItems.length ? "product-selected" : ""}`} key={product.id}>
-                <button className="product-click" onClick={() => openProduct(product)}>
+              return <div className={`product ${selectedItems.length ? "product-selected" : ""} ${!storeOpen ? "product-disabled" : ""}`} key={product.id}>
+                <button className="product-click" disabled={!storeOpen} onClick={() => openProduct(product)}>
                   <div className="product-main"><h3>{product.name}</h3>{product.description && <p>{product.description}</p>}<strong>{product.name === "綜合生魚片" ? "$300／份" : product.pricing_type === "amount" ? `$${isSashimiCategory(product.category_id) ? 100 : Number(product.min_amount).toLocaleString()}～$${Number(product.max_amount).toLocaleString()}／份` : `$${Number(product.price).toLocaleString()}／份`}</strong></div>
                 </button>
-                {selectedItems.length === 0 ? <button className="plus" aria-label={`選擇${product.name}`} onClick={() => openProduct(product)}>＋</button> :
+                {selectedItems.length === 0 ? <button className="plus" disabled={!storeOpen} aria-label={`選擇${product.name}`} onClick={() => openProduct(product)}>＋</button> :
                   <div className="selected-controls">
                     {selectedItems.map(item => <div className="selected-line" key={item.key}><span className="selected-price">${item.unit_price.toLocaleString()}／份</span><div className="mini-quantity"><button onClick={() => changeCartItem(item.key, -1)}>−</button><strong>{item.quantity}份</strong><button onClick={() => openProduct(product, item.unit_price)}>＋</button></div></div>)}
                     {product.pricing_type === "amount" && <button className="add-price" onClick={() => openProduct(product)}>＋ 新增金額</button>}
@@ -115,7 +144,7 @@ export default function Home() {
         </section>
       ))}
 
-      <button className="cartbar" onClick={() => cartCount > 0 && setShowCart(true)} disabled={cartCount === 0}><div><span>購物車</span><small>{cartCount} 項</small></div><strong>${cartTotal.toLocaleString()}</strong></button>
+      <button className="cartbar" onClick={() => storeOpen && cartCount > 0 && setShowCart(true)} disabled={cartCount === 0 || !storeOpen}><div><span>{storeOpen ? "購物車" : "目前休息中"}</span><small>{cartCount} 項</small></div><strong>${cartTotal.toLocaleString()}</strong></button>
 
       {selected && <div className="overlay" onClick={() => setSelected(null)}><div className="modal" onClick={e => e.stopPropagation()}>
         <button className="close" onClick={() => setSelected(null)}>×</button><div className="eyebrow">商品</div><h2>{selected.name}</h2>
@@ -148,6 +177,14 @@ export default function Home() {
         <p className="label">備註（選填）</p><textarea className="input textarea" value={note} onChange={e => setNote(e.target.value)} placeholder="例如：不要芥末、分開裝…" />
         <button className="primary" disabled={submitting} onClick={async () => {
               if (!cart.length || submitting) return;
+              const { data: latestStore } = await supabase.from("store_settings").select("is_open,closed_message").eq("id", 1).maybeSingle();
+              if (latestStore?.is_open === false) {
+                setStoreOpen(false);
+                setClosedMessage(latestStore.closed_message || "目前尚未營業，請稍後再來。");
+                setShowConfirm(false);
+                alert(latestStore.closed_message || "目前尚未營業，暫時無法送出訂單。");
+                return;
+              }
               if (sashimiTotal > 0 && sashimiTotal < 200) { alert(`生魚片合計至少需要 $200，目前為 $${sashimiTotal.toLocaleString()}，還差 $${sashimiShortfall.toLocaleString()}。`); return; }
               setSubmitting(true);
               try {

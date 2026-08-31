@@ -33,3 +33,5 @@ button, input, textarea { font: inherit; } button { -webkit-tap-highlight-color:
 .primary:disabled{opacity:.6;cursor:wait}.success-modal{text-align:center}.success-icon{width:64px;height:64px;margin:0 auto 16px;border-radius:50%;display:grid;place-items:center;background:#e5f0eb;color:#183f3c;font-size:34px;font-weight:800}.success-text{color:#63706e;margin:-10px 0 20px}.success-card{display:flex;justify-content:space-between;align-items:center;background:#f6f7f4;border-radius:12px;padding:14px;margin-top:8px;text-align:left}.success-card span{color:#71807e;font-size:13px}.success-card strong{font-size:20px}
 
 .sashimi-warning{margin:12px 0;padding:12px;border-radius:10px;background:#fff4e5;color:#8a4b08;font-size:14px;text-align:center}
+
+.closed-banner{max-width:760px;margin:16px auto 0;padding:14px 16px;border-radius:14px;background:#fff4e5;color:#75420a;display:flex;flex-direction:column;gap:4px;text-align:center}.closed-banner strong{font-size:17px}.closed-banner span{font-size:14px}.product-disabled{opacity:.55}.product-click:disabled,.plus:disabled{cursor:not-allowed}.cartbar:disabled{opacity:.72}.cartbar:disabled strong{color:#71807e}
